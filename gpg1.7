@@ -1,0 +1,241 @@
+>GPG Study 1.7   
+>### 자원과 메모리 관리
+
+
+
+그래픽, 사운드, 음악, 비디오, 애니메이션등을 사용하는 종합예술인 게임 프로그래밍은 그 목적을 달성하기 위하여 정말 질적 양적으로 많은 자원을 사용한다. 그리고 동시에 유저의 기기에서 쌩쌩 잘 돌아가야하기 때문에 자원을 최대한 효율적으로 다룰 수 있어야한다. 최대한 잘 돌아가게 때려박는것, 이것이 게임 최적화라 할 수 있다. 
+
+따라서 우리는 자원들을 효과적으로 다루기 위하여 자원과 자원 관리 클래스를 만들 필요가 있다. 자원은 자신의 데이터를 쉽게 불러오고, 폐기할 수 있어야하고, 자원 관리자는 자원들을 효과적으로 관리, 분배, 접근제어할 수 있아야 한다. 앞서 이야기 했던 핸들 개념을 사용하여 관리작업을 수행한다면 더욱 훌륭할 것이다.
+
+### 자원 클래스 BaseResource
+
+```c++
+class BaseResource
+{
+pubLic:
+	enum class Priority
+	{
+		LOW,
+		MIDIUM,
+		HIGH,
+	};
+
+	BaseResource() { Clear(); }
+	virtual -BaseResource(){ Destroy(); }
+	
+	// 클래스 데이터를 비운다.
+	virtual void Clear();
+	
+	// 생성과 파괴 함수들. 파생된 클래스의 Create()가 기반 클래스와
+	// 정확히 일치할 멸요는 없다는 점을 주의하기 바란다. 
+	// 파생 클래스의 Create() 에서 인자들의 구성은 얼마든지 달라질 수 있다.
+	virtual bool Create() { return false; }
+	virtual void Destroy() {}
+	
+	// Dispose()와 Recreate()는 클래스에 담긴 데이터를 폐기하거나
+	// 추가적인 인자들 없이 완전히 다시 생성힐 수 있어야 한다
+	virtual bool Recreate() = 0;
+	virtual void Dispose() = 0;
+	
+	// GetSize()는 클래스에 담긴 데이터의 크기를 돌려줘야 하며/
+	// IsDisposed()는 데이터의 존재 여부를 알려줘야 한다.
+	virtual size_t GetSize() = 0;
+	virtual bool IsDisposed() = 0;
+	
+	// 이 함수들은 우선 순위를 설정하거나 돌려준다.
+	// 우선 순위는 < 연산자로 자원들의 폐기 순서를
+	// 결정할때 쓰인다.
+	inline void SetPriority(Priority priority)
+	{ mPriority = priority; }
+	inline Priority GetPriority()
+	{ return mPriority; }
+	
+	inline void SetReferenceCount(UINT count)
+	{ mRefCount = count; }
+	inline UINT GetReferenceCount()
+	{ return mRefCount; }
+	
+	inline bool IsLocked()
+	{ return (mRefCount > 0) ? true : false; }
+	
+	inline void SetLastAccess(time_t LastAccess)
+	{ mLastAccess = LastAccess; }
+	inline time_t GetLastAccess()
+	{ return mLastAccess; }
+	
+	// 자원들의 폐기 순서를 정렬할 때 쓰이는 미만 연산자
+	virtual bool operator < (BaseResource& container);
+
+protected:
+	Priority mPriority; 
+	UINT mRefCount;
+	time_t mLastAccess;
+} ;
+```
+
+이제 이 `BaseResource`를 상속받아서 다른 자원 클래스들을 만들게 될 것이다. 각자 사정에 맞게 가상함수들을 재정의하여 사용할 것이다.
+
+* `Create()` 함수는 시스템으로부터 필요한 자원 데이터를 할당받는 형태로 재정의 될 것이다. 재생성을 고려하면 고정적으로 사용되는 데이터들을 static등을 활용하여 킵해둘 필요도 있을 것이다.
+
+* `Dispose()`와 `Recreate()`는 데이터를 싹 비워주는 기능을 구현해야할 것이다. 전체 메모리를 다 해제하지 않고 이미지, 사운드 버퍼 등의 데이터만 쾌척하여 클래스를 그대로 재사용 가능하도록 구현해야한다.
+
+* `GetSize()`는 현재 사용가능한 데이터의 크기를 돌려줘야한다. 자원이 전부 사용중이라면 0을 리턴해야겠지요. 
+
+* `IsDisposed()` 는 데이터의 Dispose여부를 체크한다. 폐기된 데이터는 재사용 가능하다는 의미이기도 하고, 사용가능한 자원이 아니라는 의미이기도 하다.
+
+* `mPriority`는 이름 그대로 자원의 우선순위를 표현하는 지표이다. 우선순위가 높으면 메모리에 더 오래동안 남아있을 수 있고, 낮은 항목은 사용되지 않는다면 다른 것들보다 먼저 해제될 것이다. 
+
+* `mRefCount`는 자원의 참조횟수이다.  참조횟수가 0이라면 해제대상이 되지 않을까? 뒤에서 더 자세히 설명하게 될 것이다.
+
+* `mLastAccess`는 자원이 마지막으로 접근된 시각을 의미한다. 오래되면 될수록 해제될 가능성이 높아진다.
+
+* `operator<`는 자원의 우선순위를 체크하는데 쓰이는 연산자이다. 폐기순서를 결정할 때 자원들을 소팅하기 위하여 쓰일 것이다. 구현부는 다음과 같다.
+
+```c++
+bool BaseResource::operator < (BaseResource& conta;ner)
+{
+	//1. Priority Check
+	if(GetPriority() < container.GetPriority())
+		return true;
+	else if(GetPriority() > container.GetPriority())
+		return false;
+	else
+	{
+		//2. LastAccess Check
+		if (m LastAccess < container.GetLastAccess())
+			return true;
+		else if(m LastAccess > container.GetLastAccess())
+			return false;
+		else
+		{
+			//3. Size Check
+			if(GetSize() < container.GetSize())
+				return true;
+			else
+				return false;
+		}
+	}
+	return false;
+}
+```
+
+### 자원 관리자 클래스 ResourceManager
+
+```c++
+class ResourceManager
+{
+public:
+	ResourceManager(){ Clear(); }
+	virtual ~ResourceManager() { Destroy(); }
+
+	void Clear();
+	bool Create(UINT maxSize);
+	void Destroy();
+
+	// 자원 맵 탐색
+	// 자윈들율 차례로 탐색해 나가는 데 쓰이는 접근 합수들
+	// DLL 경계를 넘어서 맵에 접근하려 하면 스택 포인터 폴트가 생길 수 있다. 
+	// (effective c++ 참조)그러나 이처럼 rapper함수들을 거치게 하면 안전하다.
+	
+	inline void GotoBegin()
+	{ mCurrentResource = mResourceMap.begin(); }
+
+	inline bool GotoNext()
+	{ mCurrentResource++; return IsValid(); }
+	
+	inline BaseResource* GetCurrentResource()
+	{ return (*mCurrentResource).second; }
+
+	inline bool IsValid()
+	{ 
+		return (mCurrentResource != mResourceMap.end())? 
+		true : false; 
+	}
+	
+	// 일반화된 자원 접근
+	
+	// 삽입된 자원이 메모리의 최대 허용량을 넘는 일이 일어나지
+	// 않도록 미리 메모리를 확보하는 대 쓰인다.
+	bool ReserveMemory(size_t mem);
+	
+	// 자원의 메모리 주소를 넘겨주변 고유한
+	// 핸들을돌려준다.
+	bool InsertResource(RHANDLE* hUniqueID, BaseResource* pResource);
+	
+	// 자원 관리자로부터 객체를 완전히 제거한다.
+	bool RemoveResource(RHANDLE hUniqueID);
+	
+	// 객체를 따괴하고 메모리를 해제한다.
+	bool DestroyResource(RHANDLE hUniqueID);
+	
+	// 해당 핸들에 해당하는 자원에 대한 포인터를 돌려준다.
+	// 이미 폐기된 지원인 경우에는 다시 생성한 후 돌려준다.
+	BaseResource* GetResource(RHANDLE hUniqueID);
+	
+	// 지원 관리자가 건드리지 못하도록 자원을 잠근다.
+	// 그래픽 표면에 대해 어떠한 작업을 하는 도중 
+	// 자원관리자가 그것을 폐기하지 않도록 하는 둥의 용도로 쓰인다.
+	// 지원 객체에는 여러 번의 잠금이 안전하게 일어나게 
+	// 하기 위한 잠조 카운터가 있다.
+	BaseResource* Lock(RHANDLE hUniqueID);
+	
+	// 자원에 대한 잠금을 풀고 관리를 다시 자원 관리자에게 맡긴다. 
+	// 모든 잠금들이 풀리면(참조 횟수가 0이 되면) 객체는
+	// 관리 가능한 상태가 되며, 
+	// 자원 관리자는 필요에 따라 객체를 폐기할 수 있게 된다. 
+	int UnLock(RHANDLE hUniqueID);
+
+	// 지원 객체에 대한 포인터를 지정해서 그에 해당하는 핸들을
+	// 얻는다. 중복된 포인터들이 없다는 가정하에서 작동하며,
+	// 중복된 포인터가 있는 경우 첫번째 것을 돌려준다.
+	RHANDLE FindResourceHandLe(BaseResource* pResource);
+	
+protected:
+	// 내부함수들
+	inLine void AddMemory(UINT mem)
+	{ mCurrentUsedMemory += mem; }
+	inline void RemoveMemory(UINT mem)
+	{ mCurrentUsedMemory -= mem; }
+	UINT GetNextResHandLe()
+	{ return mHNextResHandLe; }
+	
+	// 폐기 가능한 자원들을 점검힐 때 쓰이는 함수. 자원들은
+	// 허용 가능한 최대 용량에 도달한 경우에만 교체되어 나가며,
+	// 우선 순위가 낮은 것에서부터 높은 것의 순서로
+	// (자원 클래스의 < 연산자에 의해 결정된다) 폐기된다.
+	// 이 함수는 요청된 메모리가 해제될 수 없으면 실패한다.
+	bool CheckForOverallocation();
+	
+protected:
+	RHANDLE    mHNextResHandLe;
+	UINT       mCurrentUsedMemory;
+	UINT       mMaximumMemory;
+	ResMapltor mCurrentResource;
+	ResMap     mResourceMap;
+};
+```
+
+자원관리자는 `using ResMap = std::map<RHANDLE, BaseResource*>;`타입을 사용하는 자원 맵을 사용하여 자원을 관리한다.  핸들-자원 페어는 스크립트나 config파일등으로 배정될 수도 있고, 자원관리자의 함수들로 동적으로 배정될 수 도 있다. 
+
+자원관리자 객체를 생성한뒤 `Create()`로 초기화를 해준다.  자원을 동적으로 집어넣을 때는 `InsertResource()`를 활용하여 자원을 넣고 핸들을 발급 받는다. 가용 메모리보다 더 큰 자원을 집어 넣으면 현재 가지고 있는 자원들중 우선순위가 낮은 순서로 해제를 시키고 자리를 마련한다. 
+
+기존 메모리를 동적으로 운영하는 방식은 고정된 용량을 지속적으로 사용하는 자원에 대해서는 문제를 일으킬 수 있다. 이때 `ReserveMemory()`함수를 사용하여 미리 메모리 공간을 체크한다면 보다 안전하게 insert작업을 수행할 수있다. 
+
+### 핸들의 작동 방식
+
+핸들을 쓰는 이유는 이전 챕터에서 설명했기 때문에 패스한다. 자원 관리자에게 핸들로 자원을 빌려다 쓴다.
+
+```c++
+SomeResource* resource = 
+	(SomeResource*)gResourceManager->GetResource(hResHandle);
+```
+
+자원을 사용하는 사람들이 주의해야하는 것은 자원 관리자가 허락하는 시점에만 이 자원포인터가 유효하다는 점이다. 자원을 반납한뒤의 자원 포인터 `resource`는 다른 자원이 들어오거나하면 메모리 관리 로직에 의해서 다른 자원의 메모리 공간으로 변경될 수 있기 때문이다. 
+
+자원포인터를 지속적으로 유지하고 싶다면 `Lock()`함수를 통해 참조횟수를 증가시켜 해제되지 않는것을 보장받아야한다. 참조횟수가 0이 아니면 해제되지 않음이 보장되기 때문에 `Unlock()`을 호출할 떄까지 자원이 폐기되지 않는다. 
+
+### 개선방향
+
+전체 데이터 집합이 자원관리자에서 index화 되어있는 경우, 자원 관리 시스템을 통해 캐싱을 할 수 있다. 자주 사용되는 자원들에 대해서는 미리 로드시켜서 우선순위를 높여주면 메모리에 계속 남아서 다시 I/O작업등을 통해서 불러올 필요가 없어진다. 자주 사용되지 않는 자원은 우선순위를 낮추어 다른 자원들에게 빠르게 자리를 내줄 수 있도록 만들어주면 된다. 
+
+그리고 클라이언트 쪽에서 사용 경향을 집계하여 통계수치를 낸뒤 우선순위에 반영하면 동적으로 자원들의 이용현황에 따라 최적화된 캐시시스템을 만들 수 있을 것이다.
